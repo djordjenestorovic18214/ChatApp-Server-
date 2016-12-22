@@ -18,13 +18,12 @@ public class Server {
 
 		try {
 			serverSocket = new ServerSocket(port);
-
+			
 			while (true) {
 				clientSocket = serverSocket.accept();
 
 				clients.add(new ServerThread(clientSocket, clients));
 				clients.getLast().start();
-				break;
 			}
 
 		} catch (IOException e) {
