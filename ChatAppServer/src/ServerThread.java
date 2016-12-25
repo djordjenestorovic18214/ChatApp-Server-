@@ -6,6 +6,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.text.SimpleDateFormat;
 import java.util.GregorianCalendar;
@@ -18,30 +21,47 @@ public class ServerThread extends Thread {
 	Socket communicationSocket = null;
 	LinkedList<ServerThread> clients;
 	LinkedList<String> offlineClients;
+	String onlineClients = "";
 	String name;
 	char gender;
 	SimpleDateFormat sdf = new SimpleDateFormat("'Date/Time:' dd.MM.yyyy'/'HH:mm:ss'|'");
 	boolean nameExist = false;
 	static PrintWriter out;
 	boolean postojao;
+	//udp declarations
+	DatagramPacket packetFromClient = null;
+	DatagramPacket packetForClient = null;
+	DatagramSocket datagramSocket = null;
+	byte[] dataForClient = new byte[1024];
+	byte[] dataFromClient = new byte[1024];
 
-	public ServerThread(Socket socket, LinkedList<ServerThread> clients, LinkedList<String> offlineClients) {
+	//constructor
+	public ServerThread(Socket socket, DatagramSocket datagramSocket, LinkedList<ServerThread> clients, LinkedList<String> offlineClients) {
 		communicationSocket = socket;
 		this.clients = clients;
 		this.offlineClients = offlineClients;
+		this.datagramSocket = datagramSocket;
 	}
 
 	public void run() {
 		String message;
 		String g = null;
-		
+
 		try {
 			inStreamFromClient = new BufferedReader(new InputStreamReader(communicationSocket.getInputStream()));
 			outStreamToClient = new PrintStream(communicationSocket.getOutputStream());
+			//take ip and port
+			String ip = inStreamFromClient.readLine();
+			String[] pip = ip.split(" ");		
+			int port = Integer.parseInt(pip[0]);
+			ip = pip[1];
+			pip = ip.split("/");
+			ip = pip[1];
+			InetAddress clientIP = InetAddress.getByName(ip);
 			
-			//text file report
+			// text file report
 			File file = new File("chat_history.txt");
-			if (!file.exists()) 
+			if (!file.exists())
 				file.createNewFile();
 			out = new PrintWriter(new BufferedWriter(new FileWriter("chat_history.txt", true)));
 
@@ -51,13 +71,12 @@ public class ServerThread extends Thread {
 				if (nameExist) {
 					outStreamToClient.println("•Type another name(*this one already exist*): ");
 					nameExist = false;
-				}
-				else
+				} else
 					outStreamToClient.println("•Type your name(*name is required*): ");
 			}
 			outStreamToClient.println("•Type your gender(M/F): ");
 			g = inStreamFromClient.readLine();
-			
+
 			// set gender
 			while (true) {
 				if (g.startsWith("m") || g.startsWith("M")) {
@@ -71,13 +90,13 @@ public class ServerThread extends Thread {
 					g = inStreamFromClient.readLine();
 				}
 			}
-			
-			//welcome
+
+			// welcome
 			outStreamToClient.println("•••Welcome " + name
 					+ ".•••\n•••Type the message you want to send and then choose to whom you want to send it.•••"
 					+ "\n•••If you want to leave just type '/exit'.•••");
 
-			//start of messaging process
+			// start of messaging process
 			while (true) {
 				outStreamToClient.println("•Your message: ");
 				message = inStreamFromClient.readLine();
@@ -92,29 +111,36 @@ public class ServerThread extends Thread {
 				// list of online friends
 				if (clients.size() > 1) {
 					boolean genderExist = false;
-					outStreamToClient.println("•Online friends:");
+					onlineClients = "";
 
 					for (int i = 0; i < clients.size(); i++) {
 						if (this.gender != clients.get(i).gender) {
-							outStreamToClient.println("  -" + clients.get(i).getClientName());
+							onlineClients = onlineClients + "  -" + clients.get(i).getClientName() + "\n";
 							genderExist = true;
 						}
 					}
-					if(genderExist) {
+					//sent as udp packet
+					outStreamToClient.println("***udp");
+					String s="•Online friends:\n" + onlineClients;
+					dataForClient=s.getBytes();
+					packetForClient = new DatagramPacket(dataForClient, dataForClient.length, clientIP, port);
+					datagramSocket.send(packetForClient); 
+					
+					if (genderExist) {
 						outStreamToClient.println("•••Type names of receivers with only one comma separating them•••");
-					} else if(!genderExist && this.gender == 'M') {
+					} else if (!genderExist && this.gender == 'M') {
 						outStreamToClient.println("•••There are no female persons available for chat•••");
 						continue;
 					} else {
 						outStreamToClient.println("•••There are no male persons available for chat•••");
 						continue;
-					} 
-				}else {
+					}
+				} else {
 					outStreamToClient.println("•••You are the only person online•••");
 					continue;
 				}
 
-				//send message
+				// send message
 				String rNames = inStreamFromClient.readLine();
 				LinkedList<String> receivers = whoisReceiveing(rNames);
 
@@ -122,41 +148,44 @@ public class ServerThread extends Thread {
 					boolean nadjen = false;
 					int i = 0;
 					do {
-						if(r.equalsIgnoreCase(clients.get(i).getClientName())) {
+						if (r.equalsIgnoreCase(clients.get(i).getClientName())) {
 							clients.get(i).outStreamToClient.println("<" + this.getClientName() + "> " + message);
 							nadjen = true;
-							//writeToHistory
-							out.println(sdf.format((new GregorianCalendar()).getTime()) + "•|From:<" + this.getClientName() + "> To:<" 
-							+ clients.get(i).getClientName() + "> Message: “"+ message +"”");
+							// writeToHistory
+							out.println(sdf.format((new GregorianCalendar()).getTime()) + "•|From:<"
+									+ this.getClientName() + "> To:<" + clients.get(i).getClientName() + "> Message: “"
+									+ message + "”");
 							out.flush();
-							//deliveryReport
-							outStreamToClient.println("•••Message successfully delivered to <" + clients.get(i).getClientName() + ">•••");
+							// deliveryReport
+							outStreamToClient.println(
+									"•••Message successfully delivered to <" + clients.get(i).getClientName() + ">•••");
 							break;
 						}
 						i++;
-					} while(i < clients.size());
-				if(!nadjen) {
-					postojao = false;
-					for(String oc : offlineClients) {
-						if(oc.equalsIgnoreCase(r)) {
-							outStreamToClient.println("•••User '" + r + "' is now offline•••");
-							postojao = true;
-							//writeToHistory
-							out.println(sdf.format((new GregorianCalendar()).getTime()) + "×|From:<" + this.getClientName() + "> To:<" 
-									+ r + "> Message: “"+ message +"” (FAILED->user went offline)");	
-							out.flush();
-							break;
+					} while (i < clients.size());
+					if (!nadjen) {
+						postojao = false;
+						for (String oc : offlineClients) {
+							if (oc.equalsIgnoreCase(r)) {
+								outStreamToClient.println("•••User '" + r + "' is now offline•••");
+								postojao = true;
+								// writeToHistory
+								out.println(sdf.format((new GregorianCalendar()).getTime()) + "×|From:<"
+										+ this.getClientName() + "> To:<" + r + "> Message: “" + message
+										+ "” (FAILED->user went offline)");
+								out.flush();
+								break;
+							}
+						}
+						if (!postojao) {
+							outStreamToClient.println("•••User '" + r + "' does not exist•••");
 						}
 					}
-					if(!postojao) {
-					outStreamToClient.println("•••User '" + r + "' does not exist•••");
-					}
-				}	
 				}
 			}
 			communicationSocket.close();
-			if(clients.size() == 1)
-			out.close();
+			if (clients.size() == 1)
+				out.close();
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -166,22 +195,26 @@ public class ServerThread extends Thread {
 	public String getClientName() {
 		return this.name;
 	}
-
+	
+	//name validation
 	public boolean setClientName(String testName) {
 		if (testName == null || testName.isEmpty())
 			return false;
 
 		for (ServerThread client : clients) {
+			if (client.getClientName() == null) {
+				continue;
+			}
 			if (client != this && client.getClientName().equalsIgnoreCase(testName)) {
 				nameExist = true;
 				return false;
+				}
 			}
-		}
-
 		name = testName;
 		return true;
-	}
+		}
 
+	//making list of receivers
 	private LinkedList<String> whoisReceiveing(String rNames) {
 		String[] receivers = rNames.split(",");
 
